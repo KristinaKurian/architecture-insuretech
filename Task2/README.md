@@ -10,23 +10,7 @@
 - memory limit — `30Mi`;
 - target memory utilization — `80%`;
 - максимальное количество replicas — `10`;
-- порт приложения — `8080`.
-
-## Структура
-
-```text
-Task2/
-├── deployment.yaml
-├── service.yaml
-├── hpa.yaml
-├── locustfile.py
-├── README.md
-└── results/
-    ├── 01-start-status.png
-    ├── 02-locust-load.png
-    ├── 03-hpa-scaled.png
-    └── 04-hpa-events.png
-```
+- порт приложения — `8081`.
 
 ## 1. Запуск кластера и Metrics Server
 
@@ -81,10 +65,10 @@ curl <SERVICE_URL>/metrics
 На macOS также удобно использовать port-forward:
 
 ```bash
-kubectl port-forward service/scaletestapp 8080:8080
+kubectl port-forward service/scaletestapp 8081:8080
 ```
 
-После этого приложение доступно по адресу `http://127.0.0.1:8080`.
+После этого приложение доступно по адресу `http://127.0.0.1:8081`.
 
 ## 4. HPA
 
