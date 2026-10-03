@@ -10,7 +10,7 @@
 - memory limit — `30Mi`;
 - target memory utilization — `80%`;
 - максимальное количество replicas — `10`;
-- порт приложения — `8081`.
+- порт приложения — `8080`.
 
 ## 1. Запуск кластера и Metrics Server
 
@@ -65,10 +65,10 @@ curl <SERVICE_URL>/metrics
 На macOS также удобно использовать port-forward:
 
 ```bash
-kubectl port-forward service/scaletestapp 8081:8080
+kubectl port-forward service/scaletestapp 8080:8080
 ```
 
-После этого приложение доступно по адресу `http://127.0.0.1:8081`.
+После этого приложение доступно по адресу `http://127.0.0.1:8080`.
 
 ## 4. HPA
 
