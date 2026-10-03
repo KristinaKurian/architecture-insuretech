@@ -2,25 +2,17 @@
 
 ## Цель
 
-Устранить синхронные зависимости между `core-app`, `ins-product-aggregator` и `ins-comp-settlement`, которые становятся критичными при подключении новых страховых компаний.
+Устранить синхронные зависимости между `core-app`, `ins-product-aggregator` и `ins-comp-settlement`, которые становятся критичными при увеличении количества страховых компаний.
 
-Основной подход — **Event Streaming через Kafka** без изменения функциональной декомпозиции существующих сервисов.
+Основной подход — перейти на **Event Streaming через Kafka**, не меняя функциональную декомпозицию существующих сервисов.
 
-## Ключевые изменения
+## Архитектурное решение
 
-### 1. Продукты и тарифы
+### Продукты и тарифы
 
-**As-Is**
+`ins-product-aggregator` больше не обслуживает периодические REST-запросы от `core-app` и `ins-comp-settlement` для синхронизации продуктов.
 
-`core-app` каждые 15 минут и `ins-comp-settlement` раз в сутки синхронно вызывают `ins-product-aggregator`, который в рамках запроса обращается во все страховые компании.
-
-Недостаток: доступность и latency внутренних сервисов напрямую зависят от внешних API.
-
-**To-Be**
-
-`ins-product-aggregator` самостоятельно обновляет данные страховых компаний и публикует изменения в Kafka.
-
-Топик:
+Вместо этого сервис самостоятельно получает данные страховых компаний, нормализует их и публикует изменения в Kafka:
 
 ```text
 insurance.products.updated
@@ -31,98 +23,67 @@ insurance.products.updated
 - `core-app`;
 - `ins-comp-settlement`.
 
-Каждый потребитель обновляет свою локальную read model продуктов и тарифов.
+Каждый сервис обновляет собственную локальную read model продуктов и тарифов.
 
-Таким образом, `core-app` и `ins-comp-settlement` больше не вызывают `ins-product-aggregator` для периодической синхронизации данных.
+Это уменьшает синхронную связанность сервисов и исключает повторные запросы одинаковых данных.
 
-### 2. Оформленные страховки
+### Оформленные страховки
 
-**As-Is**
-
-`ins-comp-settlement` раз в сутки вызывает REST API `core-app` и забирает все оформленные за день страховки.
-
-**To-Be**
-
-После успешного оформления страховки `core-app` публикует событие:
+Ночной REST-запрос `ins-comp-settlement → core-app` заменяется событием:
 
 ```text
 insurance.policy.issued
 ```
 
-`ins-comp-settlement` потребляет эти события и формирует собственный реестр оформленных страховок.
-
-Это устраняет ночной batch-запрос в `core-app`.
+После оформления страховки `core-app` публикует событие, а `ins-comp-settlement` формирует собственный реестр на основе потока событий.
 
 ## Transactional Outbox
 
-Паттерн **Transactional Outbox применяется**.
+Паттерн **Transactional Outbox используется** в сервисах, которые должны атомарно сохранить бизнес-данные и инициировать публикацию события.
 
 ### core-app
 
-При оформлении страховки в одной локальной транзакции сохраняются:
+В одной транзакции сохраняются:
 
 1. оформленная страховка;
 2. запись в `outbox`.
 
-Отдельный publisher/CDC публикует событие `insurance.policy.issued` в Kafka.
-
-Это исключает ситуацию:
-
-```text
-страховка сохранена в БД
-        +
-событие не опубликовано
-```
+После commit отдельный publisher или CDC-механизм отправляет событие `insurance.policy.issued` в Kafka.
 
 ### ins-product-aggregator
 
-После получения и нормализации данных страховых компаний актуальное состояние продуктов сохраняется в локальное хранилище вместе с записью `outbox`. После commit событие публикуется в `insurance.products.updated`.
+Актуальное нормализованное состояние продуктов сохраняется вместе с записью `outbox`, после чего публикуется событие `insurance.products.updated`.
 
-## Надёжность обработки
+Локальное хранилище агрегатора используется для фиксации нормализованного состояния продуктов и поддержки Transactional Outbox. Функциональная ответственность сервиса при этом не меняется.
 
-Для Event Streaming используются:
+## Надёжность обработки событий
+
+Для Event Streaming предусматриваются:
 
 - at-least-once delivery;
 - idempotent consumers;
 - `event_id` для дедупликации;
 - key = `product_id` для продуктовых событий;
 - key = `policy_id` для событий оформления;
-- retry topics / DLQ для сообщений, которые не удалось обработать;
-- schema/version поля в event contract.
+- retry topics / DLQ;
+- versioning event contract.
 
 ## Результат
 
-Основные синхронные зависимости удалены:
+В целевой архитектуре исключаются следующие периодические синхронные зависимости:
 
 ```text
-ins-product-aggregator ─X─REST─> core-app
-ins-product-aggregator ─X─REST─> ins-comp-settlement
-core-app               ─X─REST─> ins-comp-settlement
+core-app → ins-product-aggregator
+ins-comp-settlement → ins-product-aggregator
+ins-comp-settlement → core-app
 ```
 
-Вместо них:
+Они заменяются публикацией и потреблением событий через Kafka.
+
+Подробный анализ исходных проблем и рисков находится в `problems-and-risks.md`.
+
+Диаграмма решения:
 
 ```text
-ins-product-aggregator
-        |
-        | insurance.products.updated
-        v
-      Kafka
-       /  \
-      v    v
-core-app  ins-comp-settlement
-
-
-core-app
-   |
-   | insurance.policy.issued
-   v
- Kafka
-   |
-   v
-ins-comp-settlement
+InsureTech_C4_container_event-driven.drawio
 ```
-
-Диаграмма: `InsureTech_C4_container_event-driven.drawio`.
-
-Подробный анализ проблем и рисков: `problems-and-risks.md`.

@@ -1,10 +1,10 @@
 # API и event contracts для ОСАГО
 
-## REST: web → core-app
+## REST API: web → core-app
 
 ### POST /api/v1/osago/applications
 
-Создаёт заявку.
+Создаёт заявку на расчёт ОСАГО.
 
 Ответ:
 
@@ -22,6 +22,8 @@
 
 ### GET /api/v1/osago/applications/{applicationId}
 
+Возвращает текущее состояние заявки и уже полученные предложения.
+
 Пример:
 
 ```json
@@ -38,6 +40,8 @@
 }
 ```
 
+## SSE: core-app → web
+
 ### GET /api/v1/osago/applications/{applicationId}/offers/stream
 
 Content-Type:
@@ -46,7 +50,9 @@ Content-Type:
 text/event-stream
 ```
 
-Пример события:
+Каждое новое предложение передаётся отдельным SSE-событием.
+
+Пример:
 
 ```text
 event: offer
@@ -54,13 +60,23 @@ id: 91a1...
 data: {"applicationId":"7af6...","insurerId":"insurer-2","price":14900}
 ```
 
+После reconnect клиент может получить актуальное состояние через REST `GET`.
+
 ## Kafka
 
 ### osago.application.requested
 
-Producer: `core-app`
+Producer:
 
-Consumer: `osago-aggregator`
+```text
+core-app
+```
+
+Consumer:
+
+```text
+osago-aggregator
+```
 
 Key:
 
@@ -68,26 +84,62 @@ Key:
 application_id
 ```
 
+Минимальный payload:
+
+```json
+{
+  "event_id": "uuid",
+  "event_version": 1,
+  "application_id": "uuid",
+  "customer_id": "uuid",
+  "vehicle": {},
+  "created_at": "...",
+  "deadline_at": "..."
+}
+```
+
 ### osago.offer.received
 
-Producer: `osago-aggregator`
+Producer:
 
-Consumer: `core-app`
+```text
+osago-aggregator
+```
 
-Одно событие на одно полученное предложение.
+Consumer:
+
+```text
+core-app
+```
+
+Публикуется отдельно для каждого полученного предложения.
 
 ### osago.application.completed
 
-Producer: `osago-aggregator`
+Producer:
 
-Consumer: `core-app`
+```text
+osago-aggregator
+```
 
-Причины завершения:
+Consumer:
 
-- все страховщики ответили;
-- истёк deadline 60 секунд.
+```text
+core-app
+```
 
-### Общие поля событий
+Workflow завершается, когда:
+
+- получены ответы всех страховых компаний;
+- либо достигнут deadline 60 секунд.
+
+### osago.application.failed
+
+Используется для технической ошибки, из-за которой обработка заявки не может быть продолжена.
+
+## Общие требования к событиям
+
+Все события содержат:
 
 ```json
 {
