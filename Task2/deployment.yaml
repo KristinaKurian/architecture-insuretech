@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: scaletestapp
-          image: scaletestapp:local
+          image: ghcr.io/yandex-practicum/scaletestapp:latest
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

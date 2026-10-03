@@ -2,12 +2,14 @@
 
 ## Цель
 
-Настроить автоматическое горизонтальное масштабирование тестового приложения в Kubernetes на основании потребления оперативной памяти.
+Настроить Horizontal Pod Autoscaler для тестового приложения `scaletestapp`, чтобы количество replicas автоматически изменялось в зависимости от потребления оперативной памяти.
 
-Используется тестовое приложение `scaletestapp`, которое предоставляет:
+Параметры задания:
 
-- `GET /` — возвращает идентификатор pod;
-- `GET /metrics` — возвращает Prometheus-метрики;
+- начальное количество replicas — `1`;
+- memory limit — `30Mi`;
+- target memory utilization — `80%`;
+- максимальное количество replicas — `10`;
 - порт приложения — `8080`.
 
 ## Структура
@@ -20,131 +22,80 @@ Task2/
 ├── locustfile.py
 ├── README.md
 └── results/
-    └── .gitkeep
+    ├── 01-start-status.png
+    ├── 02-locust-load.png
+    ├── 03-hpa-scaled.png
+    └── 04-hpa-events.png
 ```
 
-После нагрузочного теста в `results/` необходимо добавить скриншоты или логи, подтверждающие изменение количества replicas.
-
----
-
-## 1. Запуск Minikube
+## 1. Запуск кластера и Metrics Server
 
 ```bash
 minikube start
-kubectl cluster-info
-kubectl get nodes
-```
-
-Проверить, что node находится в состоянии `Ready`.
-
----
-
-## 2. Включение Metrics Server
-
-```bash
 minikube addons enable metrics-server
 ```
 
 Проверка:
 
 ```bash
+kubectl get nodes
 kubectl get pods -n kube-system | grep metrics-server
 kubectl top nodes
 ```
 
-Сразу после включения metrics-server команда `kubectl top` может некоторое время не возвращать значения — нужно дождаться появления метрик.
-
----
-
-## 3. Deployment
-
-Применить:
+## 2. Развёртывание приложения
 
 ```bash
 kubectl apply -f deployment.yaml
+kubectl apply -f service.yaml
+kubectl apply -f hpa.yaml
 ```
 
-Проверить:
+Проверка:
 
 ```bash
 kubectl get deployments
-kubectl get pods -l app=scaletestapp
+kubectl get pods
+kubectl get svc
+kubectl get hpa
+kubectl top pods
 ```
 
-Deployment запускается с одной replica.
+В `deployment.yaml` дополнительно задан `requests.memory`, потому что HPA с `target.type: Utilization` рассчитывает процент использования памяти относительно resource request.
 
-Для контейнера установлены:
+## 3. Доступ к приложению
 
-```yaml
-resources:
-  requests:
-    memory: "10Mi"
-    cpu: "10m"
-  limits:
-    memory: "30Mi"
-    cpu: "100m"
-```
-
-`30Mi` — требуемый заданием memory limit.
-
-`requests.memory` дополнительно задан, потому что HPA с `target.type: Utilization` рассчитывает процент потребления памяти относительно memory request.
-
----
-
-## 4. Service
-
-Применить:
-
-```bash
-kubectl apply -f service.yaml
-```
-
-Получить URL приложения:
+Получить URL сервиса:
 
 ```bash
 minikube service scaletestapp --url
 ```
 
-Пример:
-
-```text
-http://127.0.0.1:54321
-```
-
-Проверить приложение:
+Проверить endpoints:
 
 ```bash
 curl <SERVICE_URL>/
 curl <SERVICE_URL>/metrics
 ```
 
-При обращении к `/` приложение должно вернуть идентификатор pod.
-
----
-
-## 5. Horizontal Pod Autoscaler
-
-Применить:
+На macOS также удобно использовать port-forward:
 
 ```bash
-kubectl apply -f hpa.yaml
+kubectl port-forward service/scaletestapp 8080:8080
 ```
 
-Проверить:
+После этого приложение доступно по адресу `http://127.0.0.1:8080`.
 
-```bash
-kubectl get hpa
-kubectl describe hpa scaletestapp
-```
+## 4. HPA
 
-Настройки:
+Конфигурация HPA:
 
 - `minReplicas: 1`;
 - `maxReplicas: 10`;
-- метрика — `memory`;
-- целевая утилизация памяти — `80%`.
+- resource metric — `memory`;
+- `averageUtilization: 80`.
 
-Наблюдение в реальном времени:
+Наблюдение:
 
 ```bash
 kubectl get hpa -w
@@ -156,202 +107,71 @@ kubectl get hpa -w
 kubectl get pods -w
 ```
 
----
+## 5. Нагрузочное тестирование
 
-## 6. Проверка метрик Kubernetes
-
-Перед запуском нагрузки:
-
-```bash
-kubectl top pods
-kubectl get hpa
-```
-
-Если в поле `TARGETS` HPA отображается `<unknown>/80%`, проверить:
-
-```bash
-kubectl top pods
-kubectl get apiservice | grep metrics
-kubectl describe hpa scaletestapp
-```
-
----
-
-## 7. Нагрузочное тестирование Locust
-
-Установка:
+Установка и запуск Locust:
 
 ```bash
 python -m pip install locust
-```
-
-Получить адрес сервиса:
-
-```bash
-minikube service scaletestapp --url
-```
-
-Запустить Locust:
-
-```bash
 locust
 ```
 
-Открыть:
+Web UI:
 
 ```text
 http://localhost:8089
 ```
 
-В поле **Host** указать URL, который вернула команда:
-
-```bash
-minikube service scaletestapp --url
-```
-
-Для начала можно использовать:
-
-- Number of users: `100`;
-- Spawn rate: `10`.
-
-Если HPA не начинает масштабирование, постепенно увеличить количество пользователей.
-
-Во время теста наблюдать:
-
-```bash
-kubectl get hpa -w
-```
-
-```bash
-kubectl get deployments,pods
-```
-
-```bash
-kubectl top pods
-```
-
----
-
-## 8. Что должно произойти
-
-До нагрузки:
+В поле **Host** указывается адрес сервиса без завершающего `/`, например:
 
 ```text
-NAME           REFERENCE                 TARGETS   MINPODS   MAXPODS   REPLICAS
-scaletestapp   Deployment/scaletestapp   .../80%   1         10        1
+http://127.0.0.1:8080
 ```
 
-При росте memory utilization выше целевого значения HPA увеличивает `REPLICAS`.
+Для теста использовался сценарий из `locustfile.py` с запросами `GET /`.
 
-Схематично:
-
-```text
-Locust
-   |
-   v
-Service
-   |
-   v
-Pod
-   |
-   | memory > 80% of request
-   v
-Metrics Server
-   |
-   v
-HPA
-   |
-   v
-Deployment
-   |
-   +---- Pod 1
-   +---- Pod 2
-   +---- ...
-   +---- Pod N
-```
-
-После снижения нагрузки HPA постепенно уменьшает количество replicas. Scale-down не обязан происходить мгновенно: HPA использует окно стабилизации.
-
----
-
-## 9. Доказательства для сдачи
-
-В директорию `results/` добавить минимум два подтверждения.
-
-### Вариант 1 — скриншоты
-
-Например:
-
-```text
-results/
-├── before-load.png
-├── during-load.png
-└── after-load.png
-```
-
-На скриншотах желательно показать:
-
-1. до нагрузки — `1` replica;
-2. при нагрузке — replicas стало больше `1`;
-3. HPA показывает текущую memory utilization.
-
-### Вариант 2 — логи
-
-Можно сохранить вывод:
+Во время нагрузки контролировались:
 
 ```bash
-kubectl get hpa > results/hpa-before.txt
-kubectl get pods >> results/hpa-before.txt
-```
-
-Во время нагрузки:
-
-```bash
-kubectl get hpa > results/hpa-during-load.txt
-kubectl get pods >> results/hpa-during-load.txt
-kubectl top pods >> results/hpa-during-load.txt
-```
-
----
-
-## 10. Полная последовательность команд
-
-```bash
-minikube start
-
-minikube addons enable metrics-server
-
-kubectl apply -f deployment.yaml
-kubectl apply -f service.yaml
-kubectl apply -f hpa.yaml
-
-kubectl get pods
-kubectl get svc
 kubectl get hpa
-
+kubectl get pods
 kubectl top pods
-
-minikube service scaletestapp --url
-
-locust
 ```
 
-Для наблюдения:
+При превышении целевого уровня memory utilization HPA увеличивает количество replicas. После снижения нагрузки scale-down происходит не мгновенно из-за окна стабилизации HPA.
+
+## 6. Результаты теста
+
+В директории `results/` сохранены подтверждения работы autoscaling:
+
+- `01-start-status.png` — состояние до нагрузки: одна replica;
+- `02-locust-load.png` — активная нагрузка Locust;
+- `03-hpa-scaled.png` — увеличение количества replicas;
+- `04-hpa-events.png` — события HPA, подтверждающие rescale.
+
+## 7. Особенность macOS ARM64
+
+Официальный образ `ghcr.io/yandex-practicum/scaletestapp:latest` на момент выполнения теста не содержал manifest для `linux/arm64/v8`. Поэтому локальный запуск на Apple Silicon выполнялся через сборку образа из исходников `scaletestapp` внутри Minikube.
+
+Пример локального workaround:
 
 ```bash
-kubectl get hpa -w
+git clone https://github.com/Yandex-Practicum/scaletestapp.git
+cd scaletestapp
+
+eval $(minikube docker-env)
+docker build -t scaletestapp:local .
 ```
 
----
+Для локального теста image в Deployment временно заменялся на:
+
+```yaml
+image: scaletestapp:local
+imagePullPolicy: Never
+```
+
+В сдаваемом `deployment.yaml` оставлена ссылка на официальный образ из условия задания.
 
 ## Результат
 
-Настроено динамическое горизонтальное масштабирование приложения:
-
-- стартовое количество replicas — `1`;
-- максимальное количество replicas — `10`;
-- триггер масштабирования — memory utilization;
-- target memory utilization — `80%`;
-- memory limit контейнера — `30Mi`;
-- метрики предоставляет Metrics Server;
-- нагрузка генерируется Locust.
+Настроено динамическое масштабирование приложения по потреблению памяти: HPA использует target `80%`, масштабирует Deployment от `1` до `10` replicas, а результаты нагрузочного теста зафиксированы в `results/`.
